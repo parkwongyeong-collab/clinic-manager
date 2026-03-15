@@ -259,6 +259,7 @@ tr:hover td{background:#fdfdfd}
 .drawer.open{transform:translateX(0)}
 
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
 <div id="root"></div>
@@ -336,13 +337,21 @@ var _sb = null;
 
 function initSupabaseClient(){
   if(!S.supabaseUrl||!S.supabaseKey){_sb=null;S.sbConnected=false;return false;}
+  // Supabase 라이브러리 로드 확인
+  const sb=window.supabase||window.Supabase;
+  if(!sb||!sb.createClient){
+    console.error('Supabase 라이브러리가 로드되지 않음');
+    showToast('Supabase 라이브러리 로딩 중... 잠시 후 다시 시도해주세요','err');
+    _sb=null;S.sbConnected=false;return false;
+  }
   try{
-    _sb=supabase.createClient(S.supabaseUrl.trim(),S.supabaseKey.trim());
+    _sb=sb.createClient(S.supabaseUrl.trim(),S.supabaseKey.trim());
     S.sbConnected=true;
     console.log('Supabase 연결됨');
     return true;
   }catch(e){
     console.error('Supabase 초기화 오류:',e);
+    showToast('연결 오류: '+e.message,'err');
     _sb=null;S.sbConnected=false;return false;
   }
 }
