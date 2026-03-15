@@ -535,7 +535,14 @@ function save(key){
   }
   // 2. Supabase 저장 (비동기 - 연결된 경우만)
   if(_sb && S.sbConnected && ['patients','ledger','employees','schedule','messageLogs','inpatients','happycalls'].includes(key)){
-    sbSave(key).catch(e=>console.error('Supabase sync error:',key,e));
+    sbSave(key).then(()=>{
+      // 저장 성공 시 사이드바 저장시간 업데이트
+      const el=document.querySelector('.sb-sync-time');
+      if(el) el.textContent='방금 저장됨';
+    }).catch(e=>{
+      console.error('Supabase sync error:',key,e);
+      showToast('⚠️ Supabase 저장 실패 - 인터넷 연결 확인','err');
+    });
   }
 }
 function loadAll(){
@@ -893,10 +900,16 @@ function renderSidebar(){
         <div class="user-avatar">${nm.slice(0,1)}</div>
         <div><div class="user-name" style="font-size:13px;font-weight:500">${nm}</div><div class="user-email" style="font-size:11px;color:#6b7280">${S.user.email||''}</div></div>
       </div>
-      ${getLastSaved()?`<div style="font-size:10px;color:#a3e6a3;margin-top:8px;display:flex;align-items:center;gap:4px">
-        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-        ${getLastSaved()} 저장됨
-      </div>`:'<div style="font-size:10px;color:#9ca3af;margin-top:8px">저장 내역 없음</div>'}
+      ${S.sbConnected?
+        `<div style="font-size:10px;color:#4ade80;margin-top:8px;display:flex;align-items:center;gap:4px">
+          <svg width="9" height="9" viewBox="0 0 24 24" fill="#4ade80"><circle cx="12" cy="12" r="10"/></svg>
+          <span class="sb-sync-time">Supabase 연결됨</span>
+        </div>`:
+        getLastSaved()?`<div style="font-size:10px;color:#a3e6a3;margin-top:8px;display:flex;align-items:center;gap:4px">
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+          ${getLastSaved()} 저장됨
+        </div>`:'<div style="font-size:10px;color:#f59e0b;margin-top:8px">⚠️ Supabase 미연결</div>'
+      }
       <div class="logout-btn" onclick="S.isLoggedIn=false;try{localStorage.removeItem('clinic__loggedIn')}catch{};render()">${I.logout} 로그아웃</div>
     </div>
   </div>`;
@@ -1071,6 +1084,7 @@ function renderDashboard(){
       <button class="btn" onclick="downloadExcel()">${I.dl} 엑셀 다운로드</button>
       <button class="btn" onclick="nav('ledger')">${I.ledger} 일계표</button>
       <button class="btn btn-primary" onclick="nav('newpatient')">${I.userPlus} 새 환자 등록</button>
+      ${S.sbConnected?`<button class="btn" onclick="showLoading(true);sbLoadAll().then(()=>{showLoading(false);showToast('✅ 최신 데이터 로드 완료');render()})">🔄 최신 데이터</button>`:''}
     </div>
     <div class="stat-row">
       ${sc('#dbeafe','<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>','전체 환자',allPt.length,'','',false)}
@@ -1395,6 +1409,7 @@ function renderPatients(){
     <div class="action-bar">
       <input class="form-inp" style="max-width:280px" placeholder="이름 / 차트번호 / 전화번호 검색" value="${S.searchQ.replace(/"/g,'&quot;')}" oninput="S.searchQ=this.value;render()">
       <button class="btn btn-primary" onclick="nav('newpatient')">${I.userPlus} 새 환자 등록</button>
+      ${S.sbConnected?`<button class="btn" onclick="showLoading(true);sbLoadAll().then(()=>{showLoading(false);showToast('✅ 최신 데이터 로드 완료');render()})">🔄 최신 데이터</button>`:''}
       <button class="btn" onclick="downloadPtExcel()">${I.dl} 목록 내보내기</button>
       <span style="font-size:12px;color:#9ca3af">전체 ${S.patients.length}명${q?' → '+filtered.length+'명 검색됨':''}</span>
     </div>
@@ -2398,14 +2413,24 @@ window.addEventListener('beforeunload',()=>{
 function init(){
   try{
     loadAll(); // localStorage에서 먼저 로드
+    loadXLSX();
     // Supabase 연결 시도 (URL/Key가 저장된 경우)
     if(S.supabaseUrl && S.supabaseKey){
       if(initSupabaseClient()){
-        render(); // 일단 localStorage 데이터로 먼저 렌더
+        // 로딩 화면 먼저 보여주기
+        showLoading(true);
+        render();
+        // Supabase에서 데이터 로드
         sbLoadAll().then(loaded=>{
+          showLoading(false);
           if(loaded){
-            render(); // Supabase 데이터로 다시 렌더
+            showToast('✅ Supabase 데이터 로드 완료');
           }
+          render();
+        }).catch(e=>{
+          showLoading(false);
+          console.error('Supabase 로드 실패:',e);
+          render();
         });
       }else{
         render();
@@ -2413,7 +2438,6 @@ function init(){
     }else{
       render();
     }
-    loadXLSX();
   }catch(e){
     console.error(e);
     var r=document.getElementById('root');
