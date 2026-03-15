@@ -468,7 +468,16 @@ async function sbDelete(table,id){
 
 // 연결 테스트
 async function testSupabaseConnection(){
-  if(!initSupabaseClient()){showToast('URL과 Key를 먼저 입력해주세요','err');return;}
+  // DOM에서 직접 최신 값 읽어오기 (oninput이 씹혔을 경우 대비)
+  const urlEl=document.querySelector('input[placeholder*="supabase.co"]');
+  const keyEl=document.querySelector('input[placeholder*="eyJhbGci"]');
+  if(urlEl&&urlEl.value.trim()) S.supabaseUrl=urlEl.value.trim();
+  if(keyEl&&keyEl.value.trim()) S.supabaseKey=keyEl.value.trim();
+
+  if(!S.supabaseUrl||!S.supabaseKey){
+    showToast('URL과 Key를 먼저 입력해주세요','err');return;
+  }
+  if(!initSupabaseClient()){showToast('연결 초기화 실패 - URL/Key를 확인해주세요','err');return;}
   showToast('연결 테스트 중...');
   try{
     const{data,error}=await _sb.from('patients').select('id').limit(1);
@@ -2216,11 +2225,11 @@ function renderSettings(){
       </div>`:''}
       <div class="form-group">
         <label class="lbl">Project URL</label>
-        <input class="form-inp" placeholder="https://xxxxxxxxxxxx.supabase.co" value="${(S.supabaseUrl||'').replace(/\"/g,'&quot;')}" oninput="S.supabaseUrl=this.value">
+        <input class="form-inp" placeholder="https://xxxxxxxxxxxx.supabase.co" value="${(S.supabaseUrl||'').replace(/\"/g,'&quot;')}" oninput="S.supabaseUrl=this.value.trim();save('supabaseUrl')">
       </div>
       <div class="form-group">
         <label class="lbl">anon public key</label>
-        <input class="form-inp" type="password" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." value="${S.supabaseKey||''}" oninput="S.supabaseKey=this.value">
+        <input class="form-inp" type="password" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." value="${S.supabaseKey||''}" oninput="S.supabaseKey=this.value.trim();save('supabaseKey')">
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
         <button class="btn btn-primary" onclick="testSupabaseConnection()">🔌 연결 테스트</button>
