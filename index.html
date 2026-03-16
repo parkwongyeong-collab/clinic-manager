@@ -37,46 +37,45 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','Noto Sans KR',sans
 .page-title{font-size:22px;font-weight:600;margin-bottom:3px}
 .page-sub{font-size:13px;color:#6b7280;margin-bottom:20px}
 .action-bar{display:flex;align-items:center;gap:10px;margin-bottom:22px;flex-wrap:wrap}
-.date-nav-wrap{display:inline-flex;align-items:center;gap:0;border:1px solid #d1d5db;border-radius:10px;background:#fff}
+/* 날짜 네비게이션 */
+.date-nav-wrap{display:inline-flex;align-items:stretch;border:1px solid #d1d5db;border-radius:10px;overflow:hidden;background:#fff}
 .date-nav-btn{
-  border:none;background:none;cursor:pointer;color:#111827;
-  font-size:24px;font-weight:300;
-  width:48px;height:44px;
+  border:none;border-right:1px solid #e5e7eb;background:#fff;
+  cursor:pointer;color:#111827;font-size:22px;font-weight:300;
+  width:46px;min-height:44px;
   display:flex;align-items:center;justify-content:center;
   flex-shrink:0;
   -webkit-tap-highlight-color:rgba(0,0,0,0);
-  touch-action:manipulation;
-  user-select:none;
-  position:relative;
-  z-index:10;  /* 반드시 input보다 위 */
-  border-radius:10px;
+  touch-action:manipulation;user-select:none;
+  /* input이 절대 침범 못하도록 - 독립 stacking context */
+  isolation:isolate;
 }
+.date-nav-btn:last-child{border-right:none;border-left:1px solid #e5e7eb}
 .date-nav-btn:hover{background:#eff6ff;color:#2563eb}
 .date-nav-btn:active{background:#dbeafe;color:#2563eb}
 .date-nav-center{
   font-size:13px;font-weight:500;
-  padding:0 10px;min-width:126px;
-  text-align:center;
-  height:44px;
+  min-width:130px;
   display:flex;align-items:center;justify-content:center;
-  border-left:1px solid #e5e7eb;border-right:1px solid #e5e7eb;
-  color:#111827;
-  position:relative;  /* input의 부모 */
-  cursor:pointer;
-  user-select:none;
+  background:#fff;color:#111827;
+  cursor:pointer;user-select:none;
+  /* input은 여기 안에만 */
+  overflow:hidden;
+  position:relative;
 }
 .date-nav-center:hover{background:#f9fafb}
-.date-nav-center span{position:relative;z-index:0;pointer-events:none}
-/* 달력 input - date-nav-center 안에만 있음 */
-.date-nav-center input[type=date]{
-  position:absolute;inset:0;
-  opacity:0;cursor:pointer;
+.date-nav-center span{pointer-events:none;white-space:nowrap}
+/* hidden input - 절대 버튼 영역 못 나감 */
+.date-nav-center input.date-hidden{
+  position:absolute;top:0;left:0;
   width:100%;height:100%;
-  z-index:5;  /* span보다 위, 버튼보다 아래 */
+  opacity:0;cursor:pointer;border:none;
+  /* 크기 이 div 안에서만! */
+  max-width:100%;max-height:100%;
 }
 @media(max-width:768px){
-  .date-nav-btn{width:42px;height:40px;font-size:20px}
-  .date-nav-center{min-width:90px;font-size:12px;height:40px}
+  .date-nav-btn{width:44px;font-size:20px}
+  .date-nav-center{min-width:100px;font-size:12px}
 }
 .btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:8px;font-size:13px;cursor:pointer;border:1px solid #d1d5db;background:#fff;color:#374151;font-family:inherit;transition:background .15s}
 .btn:hover{background:#f9fafb}
@@ -357,7 +356,9 @@ var S={
   schedule:{},messageLogs:[],inpatients:{},happycalls:{},
   // 새 입원현황 구조 (호실별 영구 관리)
   wardBeds:{},
-  wardModal:null, // 'monthly' | 'meal' | 'herbal' | null
+  wardHistory:[], // 퇴원 이력 영구 보관
+  wardModal:null, // 'monthly' | 'meal' | 'herbal' | 'daily' | null
+  wardDailyDate:null,
   happycalls:{},
   ledgerDate:todayStr(),calMonth:todayStr().slice(0,7),scheduleMonth:todayStr().slice(0,7),happycallDate:todayStr(),
   modal:null,toast:null,searchQ:'',isLoggedIn:false,hcPtSearch:'',hcAcOpen:false,hcTab:'daily',drawerOpen:false,hcPopup:null,
@@ -662,7 +663,7 @@ function save(key){
     console.error('Save error:',key,e);
   }
   // 2. Supabase 저장 (비동기 - 연결된 경우만)
-  if(_sb && S.sbConnected && ['patients','ledger','employees','schedule','messageLogs','inpatients','happycalls','wardBeds'].includes(key)){
+  if(_sb && S.sbConnected && ['patients','ledger','employees','schedule','messageLogs','inpatients','happycalls','wardBeds','wardHistory'].includes(key)){
     sbSave(key).then(()=>{
       // 저장 성공 시 사이드바 저장시간 업데이트
       const el=document.querySelector('.sb-sync-time');
@@ -678,7 +679,7 @@ var DEFAULT_SB_URL='https://sfqyiwiiavaiijtahcqk.supabase.co';
 var DEFAULT_SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNmcXlpd2lpYXZhaWlqdGFoY3FrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM1NzQ2OTUsImV4cCI6MjA4OTE1MDY5NX0.3X5ToeGjlUD8H2W7rZSzGh5xCR6QekD8HMM1xQxpvhs';
 
 function loadAll(){
-  ['patients','ledger','employees','schedule','messageLogs','inpatients','happycalls','wardBeds',
+  ['patients','ledger','employees','schedule','messageLogs','inpatients','happycalls','wardBeds','wardHistory',
    'solapiKey','solapiSecret','solapiSender','user'].forEach(k=>{
     try{const v=localStorage.getItem('clinic_'+k);if(v!=null)S[k]=JSON.parse(v)}catch(e){console.warn('Load error:',k,e);}
   });
@@ -1175,9 +1176,8 @@ function renderSidebar(){
 // ── 입원현황 렌더 ──────────────────────────────────────
 // ── 입원현황 헬퍼 ─────────────────────────────────────
 function getWardBeds(){
-  // wardBeds: { '301_1': {id, roomId, bed, chartNumber, name, phone, admitDate, dischargeDate, status, meals, herbal} }
   if(!S.wardBeds) S.wardBeds={};
-  // 초기화: 없는 침대 자동 생성
+  // 없는 침대만 초기화 (기존 데이터 절대 덮어쓰지 않음)
   ROOMS.forEach(r=>{
     for(let b=1;b<=r.beds;b++){
       const key=r.id+'_'+b;
@@ -1187,6 +1187,11 @@ function getWardBeds(){
           meals:{morning:false,lunch:false,dinner:false},
           herbal:{morning:'',lunch:'',dinner:''}};
       }
+      // 기존 데이터 필드 누락 방지
+      const bed=S.wardBeds[key];
+      if(!bed.meals) bed.meals={morning:false,lunch:false,dinner:false};
+      if(!bed.herbal) bed.herbal={morning:'',lunch:'',dinner:''};
+      if(!bed.status) bed.status=bed.name?'admitted':'empty';
     }
   });
   return S.wardBeds;
@@ -1206,6 +1211,143 @@ function renderWard(date){
 
   // 팝업 모달 (월별 현황)
   let modalHtml='';
+  // 일자별 입원 현황 모달
+  if(S.wardModal==='daily'){
+    const wb=getWardBeds();
+    // 한달치 날짜 생성
+    const thisMonth=date.slice(0,7);
+    const [cy,cm]=thisMonth.split('-').map(Number);
+    const daysInMonth=new Date(cy,cm,0).getDate();
+    const allDays=Array.from({length:daysInMonth},(_,i)=>`${thisMonth}-${String(i+1).padStart(2,'0')}`);
+    // 선택된 날짜
+    // 일자별 현황 날짜: 별도 선택 없으면 보고서 날짜(td) 따라감
+    const selDay=S.wardDailyDate||date;
+    // 해당 날짜에 입원 중이었던 환자 (현재 입원중 + 이미 퇴원한 이력)
+    // 현재 침대에서 입원중인 환자
+    const dayPtsCurrent=Object.values(wb).filter(b=>{
+      if(!b.admitDate||b.status!=='admitted')return false;
+      if(b.admitDate>selDay)return false;
+      return true;
+    }).map(b=>({...b,_source:'current'}));
+    // 퇴원 이력에서 해당 날짜에 입원 중이었던 환자
+    const hist=S.wardHistory||[];
+    const dayPtsHistory=hist.filter(h=>{
+      if(!h.admitDate)return false;
+      if(h.admitDate>selDay)return false;
+      if(h.dischargeDate&&h.dischargeDate<=selDay)return false;
+      return true;
+    }).map(h=>({...h,status:'admitted',_source:'history'}));
+    // 합치기 (중복 제거: 같은 침대에 현재 있으면 이력 제외)
+    const dayPts=[...dayPtsCurrent,...dayPtsHistory.filter(h=>
+      !dayPtsCurrent.some(c=>c.roomId===h.roomId&&c.bed===h.bed)
+    )];
+    // 날짜별 입원 인원 집계 (달력용) - 현재 + 이력 포함
+    const hist2=S.wardHistory||[];
+    const dayCounts={};
+    allDays.forEach(day=>{
+      const cur=Object.values(wb).filter(b=>{
+        if(!b.admitDate||b.status!=='admitted')return false;
+        return b.admitDate<=day;
+      }).length;
+      const from_hist=hist2.filter(h=>{
+        if(!h.admitDate)return false;
+        if(h.admitDate>day)return false;
+        if(h.dischargeDate&&h.dischargeDate<=day)return false;
+        return true;
+      }).length;
+      dayCounts[day]=cur+from_hist;
+    });
+
+    modalHtml=`<div class="overlay" onclick="S.wardModal=null;render()"><div class="modal-box lg" onclick="event.stopPropagation()" style="max-width:860px">
+      <div class="modal-hdr">
+        📅 일자별 입원 현황
+        <button class="close-btn" onclick="S.wardModal=null;render()">×</button>
+      </div>
+      <div class="modal-body" style="padding:0">
+        <div style="display:grid;grid-template-columns:280px 1fr;min-height:400px">
+          <!-- 왼쪽: 달력 -->
+          <div style="border-right:1px solid #e5e7eb;padding:16px;background:#f9fafb">
+            <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:12px;text-align:center">${thisMonth.replace('-','년 ')}월</div>
+            <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px;margin-bottom:4px">
+              ${['일','월','화','수','목','금','토'].map(d=>`<div style="text-align:center;font-size:10px;color:#9ca3af;padding:3px">${d}</div>`).join('')}
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:2px">
+              ${(()=>{
+                const firstDow=new Date(cy,cm-1,1).getDay();
+                const cells=[];
+                for(let i=0;i<firstDow;i++) cells.push('<div></div>');
+                for(let d=1;d<=daysInMonth;d++){
+                  const dayStr=`${thisMonth}-${String(d).padStart(2,'0')}`;
+                  const cnt=dayCounts[dayStr]||0;
+                  const isSel=dayStr===selDay;
+                  const isToday=dayStr===date;
+                  cells.push(`<div style="text-align:center;padding:4px 2px;border-radius:6px;cursor:pointer;background:${isSel?'#2563eb':isToday?'#eff6ff':'transparent'};color:${isSel?'#fff':isToday?'#2563eb':'#374151'};font-size:12px;font-weight:${isSel||isToday?'700':'400'}"
+                    onclick="S.wardDailyDate='${dayStr}';S.wardModal='daily';render()">
+                    ${d}
+                    ${cnt>0?`<div style="font-size:9px;color:${isSel?'#bfdbfe':'#2563eb'};font-weight:700">${cnt}명</div>`:'<div style="font-size:9px;color:transparent">0</div>'}
+                  </div>`);
+                }
+                return cells.join('');
+              })()}
+            </div>
+            <!-- 범례 -->
+            <div style="margin-top:12px;font-size:11px;color:#6b7280;text-align:center">날짜 클릭 → 해당일 입원 현황</div>
+          </div>
+          <!-- 오른쪽: 환자 목록 -->
+          <div style="padding:16px">
+            <div style="font-size:14px;font-weight:600;margin-bottom:12px;color:#111827">
+              ${fmtKr(selDay)}
+              <span class="badge badge-blue" style="margin-left:8px">${dayPts.length}명 입원중</span>
+            </div>
+            ${dayPts.length===0?`<div class="no-data" style="padding:40px">
+              <div style="font-size:28px;margin-bottom:8px">🏥</div>
+              <div>해당 날짜 입원 환자 없음</div>
+            </div>`:`
+            <div style="overflow-y:auto;max-height:400px">
+              ${ROOMS.map(room=>{
+                const roomPts=dayPts.filter(b=>b.roomId===room.id);
+                if(!roomPts.length)return'';
+                return`<div style="margin-bottom:14px">
+                  <div style="font-size:12px;font-weight:700;color:${room.color};margin-bottom:6px;padding-bottom:4px;border-bottom:2px solid ${room.color}33">
+                    ${room.label} (${room.type}) — ${roomPts.length}명
+                  </div>
+                  ${roomPts.map(b=>{
+                    const admitDays=b.admitDate?Math.floor((new Date(selDay)-new Date(b.admitDate))/(864e5)):0;
+                    const totalDays=b.admitDate&&b.dischargeDate?Math.floor((new Date(b.dischargeDate)-new Date(b.admitDate))/(864e5)):null;
+                    const isHistory=b._source==='history';
+                    return`<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:${isHistory?'#fef9ec':'#f9fafb'};border-radius:8px;margin-bottom:5px;border:1px solid ${isHistory?'#fcd34d':'#f3f4f6'}">
+                      <div style="width:24px;height:24px;background:${isHistory?'#d97706':room.color};color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">${b.bed}</div>
+                      <div style="flex:1">
+                        <div style="font-weight:600;font-size:13px">${b.name||'-'}
+                          <span style="font-size:11px;color:#9ca3af;font-family:monospace;margin-left:4px">${b.chartNumber||''}</span>
+                          ${isHistory?'<span style="font-size:10px;color:#d97706;margin-left:4px">퇴원이력</span>':''}
+                        </div>
+                        <div style="font-size:11px;color:#6b7280;margin-top:2px">
+                          ${b.phone?b.phone+' · ':''}
+                          ${b.admitDate?`<b style="color:#2563eb">${b.admitDate}</b> 입원`:''}
+                          ${admitDays>0?` → <b style="color:${admitDays>14?'#dc2626':admitDays>7?'#d97706':'#2563eb'}">${admitDays}일째</b>`:''}
+                          ${b.dischargeDate?` → <b style="color:#dc2626">${b.dischargeDate}</b> 퇴원 (총 ${totalDays}일)`:''}
+                        </div>
+                      </div>
+                      <div style="text-align:right">
+                        <div style="display:flex;gap:3px;font-size:10px;margin-bottom:3px">
+                          <span style="padding:1px 5px;border-radius:3px;background:${b.meals.morning?'#fef3c7':'#f3f4f6'};color:${b.meals.morning?'#92400e':'#9ca3af'}">아침</span>
+                          <span style="padding:1px 5px;border-radius:3px;background:${b.meals.lunch?'#d1fae5':'#f3f4f6'};color:${b.meals.lunch?'#065f46':'#9ca3af'}">점심</span>
+                          <span style="padding:1px 5px;border-radius:3px;background:${b.meals.dinner?'#ede9fe':'#f3f4f6'};color:${b.meals.dinner?'#5b21b6':'#9ca3af'}">저녁</span>
+                        </div>
+                        ${(b.herbal&&(b.herbal.morning||b.herbal.lunch||b.herbal.dinner))?'<div style="font-size:10px;color:#059669">🌿 한약</div>':''}
+                      </div>
+                    </div>`;
+                  }).join('')}
+                </div>`;
+              }).join('')}
+            </div>`}
+          </div>
+        </div>
+      </div>
+    </div></div>`;
+  }
+
   // 식이 현황 모달
   if(S.wardModal==='meal'){
     const admitted=Object.values(wb).filter(b=>b.status==='admitted');
@@ -1334,11 +1476,19 @@ function renderWard(date){
     );
     // 전체 wardBeds에서 입원 이력 있는 것
     const allHistory=Object.values(wb).filter(b=>b.admitDate);
-    const monthly=allHistory.filter(b=>
-      (b.admitDate&&b.admitDate.startsWith(thisMonth))||
-      (b.dischargeDate&&b.dischargeDate.startsWith(thisMonth))||
-      b.status==='admitted'
-    );
+    // 이력에서도 가져오기
+    const histMonthly=(S.wardHistory||[]).filter(h=>
+      (h.admitDate&&h.admitDate.startsWith(thisMonth))||
+      (h.dischargeDate&&h.dischargeDate.startsWith(thisMonth))
+    ).map(h=>({...h,status:'discharged'}));
+    const monthly=[
+      ...allHistory.filter(b=>
+        (b.admitDate&&b.admitDate.startsWith(thisMonth))||
+        (b.dischargeDate&&b.dischargeDate.startsWith(thisMonth))||
+        b.status==='admitted'
+      ),
+      ...histMonthly.filter(h=>!allHistory.some(b=>b.chartNumber===h.chartNumber&&b.admitDate===h.admitDate))
+    ];
     modalHtml=`<div class="overlay" onclick="S.wardModal=null;render()"><div class="modal-box lg" onclick="event.stopPropagation()">
       <div class="modal-hdr">🏥 이번 달 입원 현황 (${thisMonth.replace('-','년 ')}월) <button class="close-btn" onclick="S.wardModal=null;render()">×</button></div>
       <div class="modal-body">
@@ -1453,9 +1603,10 @@ function renderWard(date){
       <div class="section-title">${I.bed} 입원 현황</div>
       <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <span class="badge badge-purple">입원 ${admitted.length}/${totalBeds}명</span>
-        <button class="btn btn-sm" onclick="S.wardModal='meal';render()">🍚 식이 현황</button>
-        <button class="btn btn-sm" onclick="S.wardModal='herbal';render()">🌿 한약 현황</button>
-        <button class="btn btn-sm" onclick="S.wardModal='monthly';render()">📊 이번달 현황</button>
+        <button class="btn btn-sm" onclick="S.wardDailyDate=S.ledgerDate;S.wardModal='daily';render()">📅 일자별 현황</button>
+        <button class="btn btn-sm" onclick="S.wardModal='meal';render()">🍚 식이</button>
+        <button class="btn btn-sm" onclick="S.wardModal='herbal';render()">🌿 한약</button>
+        <button class="btn btn-sm" onclick="S.wardModal='monthly';render()">📊 이번달</button>
       </div>
     </div>
     <div class="ward-summary">
@@ -1515,25 +1666,37 @@ window.wardAdmit=function(key){
   if(!wb[key])return;
   if(!wb[key].chartNumber&&!wb[key].name){showToast('차트번호를 먼저 입력해주세요','err');return;}
   wb[key].status='admitted';
-  wb[key].admitDate=todayStr();
+  wb[key].admitDate=wb[key].admitDate||todayStr(); // 이미 입원일 있으면 유지
   wb[key].dischargeDate=null;
-  saveWardBeds();
-  showToast(wb[key].name||'환자'+' 입원 확정 ✅');
+  wb[key].updatedAt=todayStr();
+  saveWardBeds(); // localStorage + Supabase 저장
+  showToast((wb[key].name||'환자')+' 입원 확정 ✅ ('+wb[key].admitDate+' 입원)');
   render();
 };
 window.wardDischarge=function(key){
   if(!confirm('퇴원 처리하시겠습니까?'))return;
   const wb=getWardBeds();
   if(!wb[key])return;
-  // 퇴원 이력 저장
+  const b=wb[key];
+  const dischargeDate=todayStr();
+  // 퇴원 이력 영구 보관 (wardHistory)
   if(!S.wardHistory)S.wardHistory=[];
-  S.wardHistory.push({...wb[key],dischargeDate:todayStr()});
+  const days=b.admitDate?Math.floor((new Date(dischargeDate)-new Date(b.admitDate))/(864e5)):0;
+  S.wardHistory.push({
+    histId:uid(),
+    roomId:b.roomId, bed:b.bed,
+    chartNumber:b.chartNumber, name:b.name, phone:b.phone,
+    admitDate:b.admitDate, dischargeDate:dischargeDate,
+    totalDays:days,
+    meals:{...b.meals}, herbal:{...b.herbal}
+  });
+  save('wardHistory');
   // 침대 초기화
-  wb[key]={id:uid(),roomId:wb[key].roomId,bed:wb[key].bed,
+  wb[key]={id:uid(),roomId:b.roomId,bed:b.bed,
     chartNumber:'',name:'',phone:'',admitDate:null,dischargeDate:null,status:'empty',
     meals:{morning:false,lunch:false,dinner:false},herbal:{morning:'',lunch:'',dinner:''}};
   saveWardBeds();
-  showToast('퇴원 처리 완료');
+  showToast(b.name+' 퇴원 처리 완료 ('+days+'일 입원)');
   render();
 };
 window.wardMeal=function(key,meal,val){
@@ -1651,9 +1814,9 @@ function renderDashboard(){
     <div class="action-bar">
       <div class="date-nav-wrap">
         <button class="date-nav-btn" onclick="btnDatePrev()">&#8249;</button>
-        <div class="date-nav-center" style="position:relative">
+        <div class="date-nav-center">
           <span id="disp-dash-date">${fmtNav(td)}</span>
-          <input type="date" value="${td}" onchange="setDate(this.value)">
+          <input class="date-hidden" type="date" value="${td}" onchange="setDate(this.value)">
         </div>
         <button class="date-nav-btn" onclick="btnDateNext()">&#8250;</button>
       </div>
@@ -2254,12 +2417,12 @@ function renderHappyCall(){
       <!-- 액션바 -->
       <div class="action-bar" style="margin-bottom:12px">
         <div class="date-nav-wrap">
-          <button class="date-nav-btn" onclick="btnHCPrev()" style="font-size:28px;width:52px;height:46px">&#8249;</button>
-          <div class="date-nav-center" style="position:relative;min-width:150px;height:46px;font-size:14px;font-weight:600">
+          <button class="date-nav-btn" onclick="btnHCPrev()" style="width:52px;font-size:26px">&#8249;</button>
+          <div class="date-nav-center" style="min-width:150px;font-size:14px;font-weight:600">
             <span id="disp-hc-date">${fmtNav(d)}</span>
-            <input type="date" value="${d}" onchange="setHCDate(this.value)">
+            <input class="date-hidden" type="date" value="${d}" onchange="setHCDate(this.value)">
           </div>
-          <button class="date-nav-btn" onclick="btnHCNext()" style="font-size:28px;width:52px;height:46px">&#8250;</button>
+          <button class="date-nav-btn" onclick="btnHCNext()" style="width:52px;font-size:26px">&#8250;</button>
         </div>
         ${ldgPts.length>0?`<button class="btn btn-primary" onclick="hcImportFromLedger('${d}')">${I.plus} 일계표 ${ldgPts.length}명</button>`:''}
         <button class="btn" onclick="hcAddManual('${d}')">${I.plus} 추가</button>
@@ -2891,7 +3054,7 @@ window.importBackup=(input)=>{
       if(data.solapiSecret)S.solapiSecret=data.solapiSecret;
       if(data.solapiSender)S.solapiSender=data.solapiSender;
       // 전체 저장
-      ['patients','ledger','employees','schedule','messageLogs','inpatients','happycalls','wardBeds','user','solapiKey','solapiSecret','solapiSender'].forEach(k=>save(k));
+      ['patients','ledger','employees','schedule','messageLogs','inpatients','happycalls','wardBeds','wardHistory','user','solapiKey','solapiSecret','solapiSender'].forEach(k=>save(k));
       showToast('복원 완료 ✓ 환자 '+S.patients.length+'명 불러옴');
       render();
     }catch(err){showToast('복원 실패: '+err.message,'err');console.error(err);}
@@ -2981,9 +3144,9 @@ window.addEventListener('beforeunload',()=>{
 // document에 한번만 등록 → DOM이 교체돼도 문제없음
 // ══════════════════════════════════════
 // ── 날짜/탭 버튼 전역 함수 (onclick에서 직접 호출) ──
-window.btnDatePrev=function(){S.ledgerDate=addDays(S.ledgerDate,-1);var e=document.getElementById('disp-dash-date');if(e)e.textContent=fmtNav(S.ledgerDate);var e2=document.getElementById('disp-ledger-date');if(e2)e2.textContent=fmtNav(S.ledgerDate);setTimeout(render,0);}
-window.btnDateNext=function(){S.ledgerDate=addDays(S.ledgerDate,1);var e=document.getElementById('disp-dash-date');if(e)e.textContent=fmtNav(S.ledgerDate);var e2=document.getElementById('disp-ledger-date');if(e2)e2.textContent=fmtNav(S.ledgerDate);setTimeout(render,0);}
-window.btnToday=function(){S.ledgerDate=todayStr();setTimeout(render,0);}
+window.btnDatePrev=function(){S.ledgerDate=addDays(S.ledgerDate,-1);if(S.wardModal==='daily')S.wardDailyDate=S.ledgerDate;var e=document.getElementById('disp-dash-date');if(e)e.textContent=fmtNav(S.ledgerDate);var e2=document.getElementById('disp-ledger-date');if(e2)e2.textContent=fmtNav(S.ledgerDate);setTimeout(render,0);}
+window.btnDateNext=function(){S.ledgerDate=addDays(S.ledgerDate,1);if(S.wardModal==='daily')S.wardDailyDate=S.ledgerDate;var e=document.getElementById('disp-dash-date');if(e)e.textContent=fmtNav(S.ledgerDate);var e2=document.getElementById('disp-ledger-date');if(e2)e2.textContent=fmtNav(S.ledgerDate);setTimeout(render,0);}
+window.btnToday=function(){S.ledgerDate=todayStr();if(S.wardModal==='daily')S.wardDailyDate=S.ledgerDate;setTimeout(render,0);}
 window.btnHCPrev=function(){S.happycallDate=addDays(S.happycallDate,-1);var e=document.getElementById('disp-hc-date');if(e)e.textContent=fmtNav(S.happycallDate);setTimeout(render,0);}
 window.btnHCNext=function(){S.happycallDate=addDays(S.happycallDate,1);var e=document.getElementById('disp-hc-date');if(e)e.textContent=fmtNav(S.happycallDate);setTimeout(render,0);}
 window.btnHCTab=function(tabId){S.hcTab=tabId;setTimeout(render,0);}
