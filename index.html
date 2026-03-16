@@ -1222,40 +1222,55 @@ function renderWard(date){
     // 선택된 날짜
     // 일자별 현황 날짜: 별도 선택 없으면 보고서 날짜(td) 따라감
     const selDay=S.wardDailyDate||date;
-    // 해당 날짜에 입원 중이었던 환자 (현재 입원중 + 이미 퇴원한 이력)
-    // 현재 침대에서 입원중인 환자
-    const dayPtsCurrent=Object.values(wb).filter(b=>{
-      if(!b.admitDate||b.status!=='admitted')return false;
-      if(b.admitDate>selDay)return false;
-      return true;
-    }).map(b=>({...b,_source:'current'}));
-    // 퇴원 이력에서 해당 날짜에 입원 중이었던 환자
+    // ── 해당 날짜 입원 환자 계산 ──
+    // 모든 기록 = 현재 입원중(wardBeds) + 퇴원이력(wardHistory)
     const hist=S.wardHistory||[];
-    const dayPtsHistory=hist.filter(h=>{
-      if(!h.admitDate)return false;
-      if(h.admitDate>selDay)return false;
-      if(h.dischargeDate&&h.dischargeDate<=selDay)return false;
+    const allRecords=[
+      // 현재 입원중 환자
+      ...Object.values(wb)
+        .filter(b=>b.admitDate && b.status==='admitted')
+        .map(b=>({...b, _source:'current', dischargeDate:null})),
+      // 퇴원 이력 환자
+      ...hist.map(h=>({...h, _source:'history'}))
+    ];
+
+    // selDay 기준 필터:
+    // - admitDate <= selDay (해당 날짜 이미 입원)
+    // - dischargeDate가 없거나 > selDay-1 (즉 selDay에 아직 있었음)
+    //   퇴원 당일도 포함! (dischargeDate === selDay → 그날 퇴원)
+    const dayPts=allRecords.filter(r=>{
+      if(!r.admitDate) return false;
+      if(r.admitDate > selDay) return false; // 아직 입원 전
+      // 퇴원일이 selDay보다 이전이면 제외 (전날 이전에 퇴원)
+      if(r.dischargeDate && r.dischargeDate < selDay) return false;
       return true;
-    }).map(h=>({...h,status:'admitted',_source:'history'}));
-    // 합치기 (중복 제거: 같은 침대에 현재 있으면 이력 제외)
-    const dayPts=[...dayPtsCurrent,...dayPtsHistory.filter(h=>
-      !dayPtsCurrent.some(c=>c.roomId===h.roomId&&c.bed===h.bed)
-    )];
-    // 날짜별 입원 인원 집계 (달력용) - 현재 + 이력 포함
-    const hist2=S.wardHistory||[];
+    })
+    // 중복 제거: 같은 환자(roomId+bed+admitDate) 현재 기록 우선
+    .reduce((acc,r)=>{
+      const dupKey=r.roomId+'_'+r.bed+'_'+r.admitDate;
+      const existing=acc.find(x=>x.roomId===r.roomId&&x.bed===r.bed&&x.admitDate===r.admitDate);
+      if(!existing) acc.push(r);
+      else if(r._source==='current') { // 현재 기록으로 교체
+        const idx=acc.indexOf(existing);
+        acc[idx]=r;
+      }
+      return acc;
+    },[])
+    .sort((a,b)=>a.roomId.localeCompare(b.roomId)||a.bed-b.bed);
+
+    // 날짜별 입원 인원 집계 (달력용)
     const dayCounts={};
     allDays.forEach(day=>{
-      const cur=Object.values(wb).filter(b=>{
-        if(!b.admitDate||b.status!=='admitted')return false;
-        return b.admitDate<=day;
-      }).length;
-      const from_hist=hist2.filter(h=>{
-        if(!h.admitDate)return false;
-        if(h.admitDate>day)return false;
-        if(h.dischargeDate&&h.dischargeDate<=day)return false;
+      dayCounts[day]=allRecords.filter(r=>{
+        if(!r.admitDate||r.admitDate>day) return false;
+        if(r.dischargeDate && r.dischargeDate<day) return false;
         return true;
-      }).length;
-      dayCounts[day]=cur+from_hist;
+      // 중복 제거
+      }).reduce((acc,r)=>{
+        const k=r.roomId+'_'+r.bed+'_'+r.admitDate;
+        if(!acc.has(k)) acc.add(k);
+        return acc;
+      }, new Set()).size;
     });
 
     modalHtml=`<div class="overlay" onclick="S.wardModal=null;render()"><div class="modal-box lg" onclick="event.stopPropagation()" style="max-width:860px">
@@ -1312,30 +1327,41 @@ function renderWard(date){
                     ${room.label} (${room.type}) — ${roomPts.length}명
                   </div>
                   ${roomPts.map(b=>{
-                    const admitDays=b.admitDate?Math.floor((new Date(selDay)-new Date(b.admitDate))/(864e5)):0;
-                    const totalDays=b.admitDate&&b.dischargeDate?Math.floor((new Date(b.dischargeDate)-new Date(b.admitDate))/(864e5)):null;
+                    // 날짜 계산
+                    const admitDays=b.admitDate?Math.floor((new Date(selDay+'T00:00:00')-new Date(b.admitDate+'T00:00:00'))/(864e5))+1:0;
+                    const totalDays=b.admitDate&&b.dischargeDate?Math.floor((new Date(b.dischargeDate+'T00:00:00')-new Date(b.admitDate+'T00:00:00'))/(864e5)):null;
                     const isHistory=b._source==='history';
-                    return`<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:${isHistory?'#fef9ec':'#f9fafb'};border-radius:8px;margin-bottom:5px;border:1px solid ${isHistory?'#fcd34d':'#f3f4f6'}">
-                      <div style="width:24px;height:24px;background:${isHistory?'#d97706':room.color};color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">${b.bed}</div>
-                      <div style="flex:1">
-                        <div style="font-weight:600;font-size:13px">${b.name||'-'}
-                          <span style="font-size:11px;color:#9ca3af;font-family:monospace;margin-left:4px">${b.chartNumber||''}</span>
-                          ${isHistory?'<span style="font-size:10px;color:#d97706;margin-left:4px">퇴원이력</span>':''}
+                    // 해당 날짜의 상태 판단
+                    const isDischargedOnThisDay=b.dischargeDate&&b.dischargeDate===selDay;
+                    const isDischargedAfterThisDay=b.dischargeDate&&b.dischargeDate>selDay;
+                    const isStillAdmitted=!b.dischargeDate&&b.status==='admitted';
+                    // 상태 배지
+                    let statusBadge='';
+                    if(isDischargedOnThisDay) statusBadge='<span style="font-size:10px;background:#fee2e2;color:#dc2626;padding:1px 6px;border-radius:4px;font-weight:600">퇴원일</span>';
+                    else if(isHistory&&b.dischargeDate) statusBadge='<span style="font-size:10px;background:#fef3c7;color:#92400e;padding:1px 6px;border-radius:4px">이력</span>';
+                    else if(isStillAdmitted) statusBadge='<span style="font-size:10px;background:#dbeafe;color:#1d4ed8;padding:1px 6px;border-radius:4px;font-weight:600">입원중</span>';
+                    return`<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:${isDischargedOnThisDay?'#fff5f5':isHistory?'#fffbeb':'#f9fafb'};border-radius:8px;margin-bottom:6px;border:1px solid ${isDischargedOnThisDay?'#fca5a5':isHistory?'#fde68a':'#f3f4f6'}">
+                      <div style="width:26px;height:26px;background:${isDischargedOnThisDay?'#dc2626':isHistory?'#d97706':room.color};color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0">${b.bed}</div>
+                      <div style="flex:1;min-width:0">
+                        <div style="font-weight:600;font-size:13px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                          ${b.name||'-'}
+                          <span style="font-size:11px;color:#9ca3af;font-family:monospace">${b.chartNumber||''}</span>
+                          ${statusBadge}
                         </div>
-                        <div style="font-size:11px;color:#6b7280;margin-top:2px">
-                          ${b.phone?b.phone+' · ':''}
-                          ${b.admitDate?`<b style="color:#2563eb">${b.admitDate}</b> 입원`:''}
-                          ${admitDays>0?` → <b style="color:${admitDays>14?'#dc2626':admitDays>7?'#d97706':'#2563eb'}">${admitDays}일째</b>`:''}
-                          ${b.dischargeDate?` → <b style="color:#dc2626">${b.dischargeDate}</b> 퇴원 (총 ${totalDays}일)`:''}
+                        <div style="font-size:11px;color:#6b7280;margin-top:3px">
+                          ${b.phone?`📞 ${b.phone}  `:''}
+                          <span style="color:#2563eb;font-weight:500">${b.admitDate||''} 입원</span>
+                          ${admitDays>0?`<span style="margin-left:4px;color:${admitDays>14?'#dc2626':admitDays>7?'#d97706':'#059669'};font-weight:600">${admitDays}일째</span>`:''}
+                          ${b.dischargeDate?`<span style="margin-left:4px;color:#dc2626;font-weight:500">→ ${b.dischargeDate} 퇴원</span><span style="color:#6b7280"> (총 ${totalDays}일)</span>`:''}
                         </div>
                       </div>
-                      <div style="text-align:right">
+                      <div style="text-align:right;flex-shrink:0">
                         <div style="display:flex;gap:3px;font-size:10px;margin-bottom:3px">
-                          <span style="padding:1px 5px;border-radius:3px;background:${b.meals.morning?'#fef3c7':'#f3f4f6'};color:${b.meals.morning?'#92400e':'#9ca3af'}">아침</span>
-                          <span style="padding:1px 5px;border-radius:3px;background:${b.meals.lunch?'#d1fae5':'#f3f4f6'};color:${b.meals.lunch?'#065f46':'#9ca3af'}">점심</span>
-                          <span style="padding:1px 5px;border-radius:3px;background:${b.meals.dinner?'#ede9fe':'#f3f4f6'};color:${b.meals.dinner?'#5b21b6':'#9ca3af'}">저녁</span>
+                          <span style="padding:2px 6px;border-radius:3px;background:${b.meals&&b.meals.morning?'#fef3c7':'#f3f4f6'};color:${b.meals&&b.meals.morning?'#92400e':'#d1d5db'}">아침</span>
+                          <span style="padding:2px 6px;border-radius:3px;background:${b.meals&&b.meals.lunch?'#d1fae5':'#f3f4f6'};color:${b.meals&&b.meals.lunch?'#065f46':'#d1d5db'}">점심</span>
+                          <span style="padding:2px 6px;border-radius:3px;background:${b.meals&&b.meals.dinner?'#ede9fe':'#f3f4f6'};color:${b.meals&&b.meals.dinner?'#5b21b6':'#d1d5db'}">저녁</span>
                         </div>
-                        ${(b.herbal&&(b.herbal.morning||b.herbal.lunch||b.herbal.dinner))?'<div style="font-size:10px;color:#059669">🌿 한약</div>':''}
+                        ${b.herbal&&(b.herbal.morning||b.herbal.lunch||b.herbal.dinner)?'<span style="font-size:10px;color:#059669;background:#d1fae5;padding:1px 6px;border-radius:3px">🌿 한약</span>':''}
                       </div>
                     </div>`;
                   }).join('')}
@@ -1679,24 +1705,33 @@ window.wardDischarge=function(key){
   if(!wb[key])return;
   const b=wb[key];
   const dischargeDate=todayStr();
-  // 퇴원 이력 영구 보관 (wardHistory)
+  const days=b.admitDate?Math.floor((new Date(dischargeDate+'T00:00:00')-new Date(b.admitDate+'T00:00:00'))/(864e5)):0;
+
+  // 1. wardHistory에 퇴원 이력 영구 보관
   if(!S.wardHistory)S.wardHistory=[];
-  const days=b.admitDate?Math.floor((new Date(dischargeDate)-new Date(b.admitDate))/(864e5)):0;
-  S.wardHistory.push({
-    histId:uid(),
+  // 기존 이력 있으면 업데이트, 없으면 추가
+  const existIdx=S.wardHistory.findIndex(h=>h.roomId===b.roomId&&h.bed===b.bed&&h.admitDate===b.admitDate);
+  const histRecord={
+    histId:existIdx>=0?S.wardHistory[existIdx].histId:uid(),
     roomId:b.roomId, bed:b.bed,
     chartNumber:b.chartNumber, name:b.name, phone:b.phone,
     admitDate:b.admitDate, dischargeDate:dischargeDate,
     totalDays:days,
-    meals:{...b.meals}, herbal:{...b.herbal}
-  });
+    meals:{morning:b.meals.morning,lunch:b.meals.lunch,dinner:b.meals.dinner},
+    herbal:{morning:b.herbal.morning,lunch:b.herbal.lunch,dinner:b.herbal.dinner}
+  };
+  if(existIdx>=0) S.wardHistory[existIdx]=histRecord;
+  else S.wardHistory.push(histRecord);
   save('wardHistory');
-  // 침대 초기화
+
+  // 2. 침대는 빈칸으로 (새 환자 받을 수 있도록)
   wb[key]={id:uid(),roomId:b.roomId,bed:b.bed,
-    chartNumber:'',name:'',phone:'',admitDate:null,dischargeDate:null,status:'empty',
-    meals:{morning:false,lunch:false,dinner:false},herbal:{morning:'',lunch:'',dinner:''}};
+    chartNumber:'',name:'',phone:'',
+    admitDate:null,dischargeDate:null,status:'empty',
+    meals:{morning:false,lunch:false,dinner:false},
+    herbal:{morning:'',lunch:'',dinner:''}};
   saveWardBeds();
-  showToast(b.name+' 퇴원 처리 완료 ('+days+'일 입원)');
+  showToast('🚪 '+b.name+' 퇴원 완료 | 입원: '+b.admitDate+' ~ '+dischargeDate+' ('+days+'일)');
   render();
 };
 window.wardMeal=function(key,meal,val){
