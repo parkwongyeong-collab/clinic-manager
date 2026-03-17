@@ -572,66 +572,61 @@ async function sbSave(key){
   if(!_sb)return;
   try{
     if(key==='patients'){
-      if(S.patients.length===0)return;
+      if(!S.patients.length)return;
       const{error}=await _sb.from('patients').upsert(S.patients.map(ptToRow),{onConflict:'id'});
-      if(error)console.error('patients 저장 오류:',error);
+      if(error)console.error('patients 오류:',error);
     }
     else if(key==='ledger'){
       const rows=[];
       Object.entries(S.ledger).forEach(([date,rs])=>rs.forEach(r=>rows.push(ledRowToSB(r,date))));
-      if(rows.length===0)return;
+      if(!rows.length)return;
       const{error}=await _sb.from('ledger_rows').upsert(rows,{onConflict:'id'});
-      if(error)console.error('ledger 저장 오류:',error);
+      if(error)console.error('ledger 오류:',error);
     }
     else if(key==='employees'){
-      if(S.employees.length===0)return;
-      // employees 는 name이 unique - upsert
+      if(!S.employees.length)return;
       const{error}=await _sb.from('employees').upsert(S.employees.map(n=>({name:n})),{onConflict:'name',ignoreDuplicates:true});
-      if(error)console.error('employees 저장 오류:',error);
+      if(error)console.error('employees 오류:',error);
     }
     else if(key==='schedule'){
       const rows=[];
       Object.entries(S.schedule).forEach(([date,emps])=>Object.entries(emps).forEach(([emp,shift])=>{if(shift)rows.push({date,employee_name:emp,shift});}));
-      if(rows.length===0)return;
+      if(!rows.length)return;
       const{error}=await _sb.from('schedule').upsert(rows,{onConflict:'date,employee_name'});
-      if(error)console.error('schedule 저장 오류:',error);
+      if(error)console.error('schedule 오류:',error);
     }
     else if(key==='messageLogs'){
-      if(S.messageLogs.length===0)return;
+      if(!S.messageLogs.length)return;
       const rows=S.messageLogs.map(l=>({id:l.id,created_at_kr:l.createdAt||'',patient_name:l.patientName||'',to_number:l.to||'',type:l.type||'',status:l.status||'',text:l.text||''}));
       const{error}=await _sb.from('message_logs').upsert(rows,{onConflict:'id'});
-      if(error)console.error('messageLogs 저장 오류:',error);
+      if(error)console.error('messageLogs 오류:',error);
     }
     else if(key==='inpatients'){
       const rows=[];
       Object.entries(S.inpatients).forEach(([date,rooms])=>Object.entries(rooms).forEach(([roomId,beds])=>beds.forEach((b,bi)=>{if(b)rows.push(inpToSB(date,roomId,bi,b));})));
-      if(rows.length===0)return;
+      if(!rows.length)return;
       const{error}=await _sb.from('inpatients').upsert(rows,{onConflict:'id'});
-      if(error)console.error('inpatients 저장 오류:',error);
+      if(error)console.error('inpatients 오류:',error);
     }
     else if(key==='happycalls'){
       const rows=[];
-      Object.entries(S.happycalls).forEach(([,hcs])=>hcs.forEach(h=>rows.push(hcToSB(h))));
-      if(rows.length===0)return;
+      Object.entries(S.happycalls||{}).forEach(([,hcs])=>hcs.forEach(h=>rows.push(hcToSB(h))));
+      if(!rows.length)return;
       const{error}=await _sb.from('happycalls').upsert(rows,{onConflict:'id'});
-      if(error)console.error('happycalls 저장 오류:',error);
+      if(error)console.error('happycalls 오류:',error);
     }
     else if(key==='wardBeds'){
-      // wardBeds를 JSON으로 통째로 저장 (key-value 방식)
-      const val=JSON.stringify(S.wardBeds||{});
-      const{error}=await _sb.from('app_settings').upsert(
-        {key:'wardBeds',value:val,updated_at:new Date().toISOString()},
-        {onConflict:'key'}
-      );
-      if(error)console.error('wardBeds 저장 오류:',error);
+      const wb=S.wardBeds||{};
+      const rows=Object.entries(wb).map(([k,b])=>wardBedToSB(k,b)).filter(r=>r.name||r.status!=='empty');
+      if(!rows.length)return;
+      const{error}=await _sb.from('ward_beds').upsert(rows,{onConflict:'id'});
+      if(error)console.error('ward_beds 오류:',error);
     }
     else if(key==='wardHistory'){
-      const val=JSON.stringify(S.wardHistory||[]);
-      const{error}=await _sb.from('app_settings').upsert(
-        {key:'wardHistory',value:val,updated_at:new Date().toISOString()},
-        {onConflict:'key'}
-      );
-      if(error)console.error('wardHistory 저장 오류:',error);
+      const rows=(S.wardHistory||[]).map(h=>wardHistToSB(h));
+      if(!rows.length)return;
+      const{error}=await _sb.from('ward_history').upsert(rows,{onConflict:'hist_id'});
+      if(error)console.error('ward_history 오류:',error);
     }
   }catch(e){console.error('sbSave 오류:',key,e);}
 }
@@ -2329,6 +2324,7 @@ function renderPatients(){
     <div class="action-bar">
       <input class="form-inp" style="max-width:280px" placeholder="이름 / 차트번호 / 전화번호 검색" value="${S.searchQ.replace(/"/g,'&quot;')}" oninput="S.searchQ=this.value;render()">
       <button class="btn btn-primary" onclick="nav('newpatient')">${I.userPlus} 새 환자 등록</button>
+      <button class="btn" style="background:#2563eb;color:#fff;border-color:#2563eb" onclick="savePatientsToDB()">💾 저장하기</button>
       ${S.sbConnected?`<button class="btn" onclick="showLoading(true);sbLoadAll().then(()=>{showLoading(false);showToast('✅ 최신 데이터 로드 완료');render()})">🔄 최신 데이터</button>`:''}
       <button class="btn" onclick="downloadPtExcel()">${I.dl} 목록 내보내기</button>
       <span style="font-size:12px;color:#9ca3af">전체 ${S.patients.length}명${q?' → '+filtered.length+'명 검색됨':''}</span>
@@ -2442,6 +2438,27 @@ window.confirmImport=async()=>{
   }
   S.xlsImportData=null;
   render();
+};
+
+// 환자 목록 Supabase 저장
+window.savePatientsToDB=async function(){
+  if(!S.patients.length){showToast('저장할 환자가 없습니다','err');return;}
+  // localStorage 저장
+  save('patients');
+  if(!_sb||!S.sbConnected){
+    showToast('✅ 로컬에 저장됨 (Supabase 미연결)');return;
+  }
+  // 버튼 로딩 표시
+  const btn=document.querySelector('[onclick="savePatientsToDB()"]');
+  if(btn){btn.textContent='저장 중...';btn.disabled=true;}
+  try{
+    await sbSave('patients');
+    if(btn){btn.textContent='💾 저장하기';btn.disabled=false;}
+    showToast('✅ '+S.patients.length+'명 Supabase에 저장 완료!');
+  }catch(e){
+    if(btn){btn.textContent='💾 저장하기';btn.disabled=false;}
+    showToast('⚠️ 저장 실패: '+e.message,'err');
+  }
 };
 
 window.downloadSampleXls=()=>{
