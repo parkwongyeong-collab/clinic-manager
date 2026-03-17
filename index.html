@@ -380,6 +380,7 @@ var _sb = null;
 // Realtime 채널 관리
 var _realtimeChannel = null;
 var _reloadTimer = null;
+var _isSaving = false; // 저장 중엔 Realtime reload 차단
 
 function initSupabaseClient(){
   if(!S.supabaseUrl||!S.supabaseKey){_sb=null;S.sbConnected=false;return false;}
@@ -570,11 +571,12 @@ async function sbLoadAll(){
 // ── Supabase 저장 함수들 ───────────────────────────
 async function sbSave(key){
   if(!_sb)return;
+  _isSaving=true; // Realtime 차단 시작
   try{
     if(key==='patients'){
-      if(!S.patients.length)return;
+      if(!S.patients.length){_isSaving=false;return;}
       const rows=S.patients.map(ptToRow);
-      const BATCH=500; // Supabase 한번에 500개 제한
+      const BATCH=500;
       let hasError=false;
       for(let i=0;i<rows.length;i+=BATCH){
         const batch=rows.slice(i,i+BATCH);
@@ -638,7 +640,14 @@ async function sbSave(key){
       const{error}=await _sb.from('ward_history').upsert(rows,{onConflict:'hist_id'});
       if(error)console.error('ward_history 오류:',error);
     }
-  }catch(e){console.error('sbSave 오류:',key,e);}
+  }catch(e){
+    _isSaving=false; // 오류 시도 플래그 해제
+    console.error('sbSave 오류:',key,e);
+    throw e;
+  }finally{
+    // 저장 완료 후 3초 뒤 Realtime 재개 (Supabase 전파 대기)
+    setTimeout(function(){_isSaving=false;},3000);
+  }
 }
 
 // Supabase 에서 개별 삭제
