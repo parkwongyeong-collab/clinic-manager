@@ -573,15 +573,25 @@ async function sbSave(key){
   try{
     if(key==='patients'){
       if(!S.patients.length)return;
-      const{error}=await _sb.from('patients').upsert(S.patients.map(ptToRow),{onConflict:'id'});
-      if(error)console.error('patients 오류:',error);
+      const rows=S.patients.map(ptToRow);
+      const BATCH=500; // Supabase 한번에 500개 제한
+      let hasError=false;
+      for(let i=0;i<rows.length;i+=BATCH){
+        const batch=rows.slice(i,i+BATCH);
+        const{error}=await _sb.from('patients').upsert(batch,{onConflict:'id'});
+        if(error){console.error('patients 배치 오류:',i,error);hasError=true;break;}
+      }
+      if(hasError) throw new Error('patients 저장 중 오류 발생');
     }
     else if(key==='ledger'){
       const rows=[];
       Object.entries(S.ledger).forEach(([date,rs])=>rs.forEach(r=>rows.push(ledRowToSB(r,date))));
       if(!rows.length)return;
-      const{error}=await _sb.from('ledger_rows').upsert(rows,{onConflict:'id'});
-      if(error)console.error('ledger 오류:',error);
+      const BATCH=500;
+      for(let i=0;i<rows.length;i+=BATCH){
+        const{error}=await _sb.from('ledger_rows').upsert(rows.slice(i,i+BATCH),{onConflict:'id'});
+        if(error){console.error('ledger 배치 오류:',i,error);break;}
+      }
     }
     else if(key==='employees'){
       if(!S.employees.length)return;
@@ -2424,40 +2434,45 @@ window.confirmImport=async()=>{
   });
   // ① localStorage 즉시 저장
   save('patients');
-  // ② Supabase 저장 (연결된 경우)
+  S.xlsImportData=null;
+  render();
+  // ② Supabase 저장 (연결된 경우) - 배치로 처리
   if(_sb&&S.sbConnected){
-    showToast('Supabase에 저장 중...');
+    const total=S.patients.length;
+    showToast(`Supabase 저장 중... (총 ${total}명)`);
     try{
       await sbSave('patients');
-      showToast(`✅ 완료! 신규 ${added}명 등록${overwritten>0?' · 덮어쓰기 '+overwritten+'명':''}${skipped>0?' · 중복 건너뜀 '+skipped+'건':''}`);
+      showToast(`✅ 완료! ${total}명 Supabase 저장됨 | 신규 ${added}명 등록${overwritten>0?' · 덮어쓰기 '+overwritten+'명':''}${skipped>0?' · 중복 건너뜀 '+skipped+'건':''}`);
     }catch(e){
-      showToast('⚠️ Supabase 저장 실패 - localStorage에는 저장됨','err');
+      showToast('⚠️ 일부 저장 실패 - 💾 저장하기 버튼을 다시 눌러주세요','err');
+      console.error('confirmImport Supabase 오류:',e);
     }
   } else {
     showToast(`완료! 신규 ${added}명 등록${overwritten>0?' · 덮어쓰기 '+overwritten+'명':''}${skipped>0?' · 중복 건너뜀 '+skipped+'건':''}`);
   }
-  S.xlsImportData=null;
-  render();
 };
 
 // 환자 목록 Supabase 저장
 window.savePatientsToDB=async function(){
   if(!S.patients.length){showToast('저장할 환자가 없습니다','err');return;}
-  // localStorage 저장
-  save('patients');
+  save('patients'); // localStorage 즉시 저장
   if(!_sb||!S.sbConnected){
     showToast('✅ 로컬에 저장됨 (Supabase 미연결)');return;
   }
-  // 버튼 로딩 표시
+  const total=S.patients.length;
+  const BATCH=500;
+  const totalBatches=Math.ceil(total/BATCH);
   const btn=document.querySelector('[onclick="savePatientsToDB()"]');
   if(btn){btn.textContent='저장 중...';btn.disabled=true;}
+  showToast(`Supabase 저장 중... (${total}명, ${totalBatches}번 배치)`);
   try{
     await sbSave('patients');
     if(btn){btn.textContent='💾 저장하기';btn.disabled=false;}
-    showToast('✅ '+S.patients.length+'명 Supabase에 저장 완료!');
+    showToast(`✅ ${total}명 전체 Supabase 저장 완료!`);
   }catch(e){
     if(btn){btn.textContent='💾 저장하기';btn.disabled=false;}
     showToast('⚠️ 저장 실패: '+e.message,'err');
+    console.error('savePatientsToDB 오류:',e);
   }
 };
 
