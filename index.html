@@ -425,6 +425,8 @@ function startRealtime(){
       .on('postgres_changes',{event:'*',schema:'public',table:'happycalls'},handleRealtimeChange)
       .on('postgres_changes',{event:'*',schema:'public',table:'inpatients'},handleRealtimeChange)
       .on('postgres_changes',{event:'*',schema:'public',table:'schedule'},handleRealtimeChange)
+      .on('postgres_changes',{event:'*',schema:'public',table:'ward_beds'},handleRealtimeChange)
+      .on('postgres_changes',{event:'*',schema:'public',table:'ward_history'},handleRealtimeChange)
       .subscribe(function(status){
         console.log('Realtime 상태:', status);
         var el=document.querySelector('.sb-sync-time');
@@ -534,6 +536,28 @@ async function sbLoadAll(){
       S.happycalls={};
       hc.data.forEach(r=>{if(!S.happycalls[r.date])S.happycalls[r.date]=[];S.happycalls[r.date].push(sbToHc(r));});
     }
+    // wardBeds, wardHistory는 Supabase 테이블 없으므로 localStorage에서 보완
+    try{
+      const wbStr=localStorage.getItem('clinic_wardBeds');
+      const whStr=localStorage.getItem('clinic_wardHistory');
+      if(wbStr) S.wardBeds=JSON.parse(wbStr);
+      if(whStr){ const wh=JSON.parse(whStr); S.wardHistory=Array.isArray(wh)?wh:[]; }
+    }catch(e){}
+
+    // wardBeds, wardHistory 로드 (app_settings 테이블)
+    try{
+      const{data:settings}=await _sb.from('app_settings').select('*');
+      if(settings){
+        settings.forEach(row=>{
+          if(row.key==='wardBeds'){
+            try{const parsed=JSON.parse(row.value);if(parsed&&typeof parsed==='object')S.wardBeds=parsed;}catch(e){}
+          }
+          if(row.key==='wardHistory'){
+            try{const parsed=JSON.parse(row.value);if(Array.isArray(parsed))S.wardHistory=parsed;}catch(e){}
+          }
+        });
+      }
+    }catch(e){console.warn('app_settings 로드 실패 (테이블 없을 수 있음):',e);}
     showLoading(false);
     return true;
   }catch(e){
@@ -591,6 +615,23 @@ async function sbSave(key){
       if(rows.length===0)return;
       const{error}=await _sb.from('happycalls').upsert(rows,{onConflict:'id'});
       if(error)console.error('happycalls 저장 오류:',error);
+    }
+    else if(key==='wardBeds'){
+      // wardBeds를 JSON으로 통째로 저장 (key-value 방식)
+      const val=JSON.stringify(S.wardBeds||{});
+      const{error}=await _sb.from('app_settings').upsert(
+        {key:'wardBeds',value:val,updated_at:new Date().toISOString()},
+        {onConflict:'key'}
+      );
+      if(error)console.error('wardBeds 저장 오류:',error);
+    }
+    else if(key==='wardHistory'){
+      const val=JSON.stringify(S.wardHistory||[]);
+      const{error}=await _sb.from('app_settings').upsert(
+        {key:'wardHistory',value:val,updated_at:new Date().toISOString()},
+        {onConflict:'key'}
+      );
+      if(error)console.error('wardHistory 저장 오류:',error);
     }
   }catch(e){console.error('sbSave 오류:',key,e);}
 }
@@ -652,37 +693,54 @@ function showLoading(show){
   }else{if(el)el.remove();}
 }
 
+const SB_KEYS=['patients','ledger','employees','schedule','messageLogs','inpatients','happycalls','wardBeds','wardHistory'];
+
 function save(key){
-  // 1. localStorage 저장 (즉시, 오프라인 백업)
+  // 1. localStorage (오프라인 백업)
   try{
     localStorage.setItem('clinic_'+key,JSON.stringify(S[key]));
     localStorage.setItem('clinic__lastSaved',new Date().toLocaleString('ko-KR'));
-  }catch(e){
-    if(e.name==='QuotaExceededError'){showToast('저장 공간 부족! 설정에서 데이터 정리 후 재시도해주세요','err');}
-    else{showToast('저장 실패: '+e.message,'err');}
-    console.error('Save error:',key,e);
-  }
-  // 2. Supabase 저장 (비동기 - 연결된 경우만)
-  if(_sb && S.sbConnected && ['patients','ledger','employees','schedule','messageLogs','inpatients','happycalls','wardBeds','wardHistory'].includes(key)){
+  }catch(e){ console.error('localStorage 저장 오류:',key,e); }
+
+  // 2. Supabase 우선 저장 (연결된 경우)
+  if(_sb && S.sbConnected && SB_KEYS.includes(key)){
     sbSave(key).then(()=>{
-      // 저장 성공 시 사이드바 저장시간 업데이트
       const el=document.querySelector('.sb-sync-time');
-      if(el) el.textContent='방금 저장됨';
+      if(el) el.textContent='✅ 저장됨';
     }).catch(e=>{
-      console.error('Supabase sync error:',key,e);
-      showToast('⚠️ Supabase 저장 실패 - 인터넷 연결 확인','err');
+      console.error('Supabase 저장 오류:',key,e);
+      // Supabase 실패해도 localStorage에는 저장됐으므로 조용히
     });
   }
+}
+
+// Supabase 연결 여부에 따라 데이터 로드 우선순위 결정
+async function loadFromSupabaseOrLocal(){
+  if(_sb && S.sbConnected){
+    // Supabase에서 로드 (최신 데이터)
+    const loaded = await sbLoadAll();
+    if(loaded) return true;
+  }
+  // Supabase 실패 시 localStorage fallback
+  return false;
 }
 // 하드코딩된 기본 Supabase 설정
 var DEFAULT_SB_URL='https://sfqyiwiiavaiijtahcqk.supabase.co';
 var DEFAULT_SB_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNmcXlpd2lpYXZhaWlqdGFoY3FrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM1NzQ2OTUsImV4cCI6MjA4OTE1MDY5NX0.3X5ToeGjlUD8H2W7rZSzGh5xCR6QekD8HMM1xQxpvhs';
 
 function loadAll(){
-  ['patients','ledger','employees','schedule','messageLogs','inpatients','happycalls','wardBeds','wardHistory',
+  ['patients','ledger','employees','schedule','messageLogs','inpatients','happycalls','wardBeds',
    'solapiKey','solapiSecret','solapiSender','user'].forEach(k=>{
     try{const v=localStorage.getItem('clinic_'+k);if(v!=null)S[k]=JSON.parse(v)}catch(e){console.warn('Load error:',k,e);}
   });
+  // wardHistory: 배열이어야 하므로 별도 안전 처리
+  try{
+    const wh=localStorage.getItem('clinic_wardHistory');
+    if(wh){
+      const parsed=JSON.parse(wh);
+      S.wardHistory=Array.isArray(parsed)?parsed:[];
+    }
+  }catch(e){S.wardHistory=[];}
   // supabaseUrl/Key는 빈값이면 기본값 사용
   try{
     const savedUrl=localStorage.getItem('clinic_supabaseUrl');
@@ -1175,6 +1233,78 @@ function renderSidebar(){
 
 // ── 입원현황 렌더 ──────────────────────────────────────
 // ── 입원현황 헬퍼 ─────────────────────────────────────
+
+// ── ward_beds / ward_history Supabase 변환 ──────────────
+function wardBedToSB(key, b){
+  return {
+    id: b.id||key,
+    room_id: b.roomId||'',
+    bed: b.bed||1,
+    chart_number: b.chartNumber||'',
+    name: b.name||'',
+    phone: b.phone||'',
+    admit_date: b.admitDate||null,
+    discharge_date: b.dischargeDate||null,
+    status: b.status||'empty',
+    meal_morning: !!(b.meals&&b.meals.morning),
+    meal_lunch: !!(b.meals&&b.meals.lunch),
+    meal_dinner: !!(b.meals&&b.meals.dinner),
+    herbal_morning: (b.herbal&&b.herbal.morning)||'',
+    herbal_lunch: (b.herbal&&b.herbal.lunch)||'',
+    herbal_dinner: (b.herbal&&b.herbal.dinner)||'',
+    updated_at: b.updatedAt||''
+  };
+}
+function sbToWardBed(r){
+  return {
+    id: r.id,
+    roomId: r.room_id,
+    bed: r.bed,
+    chartNumber: r.chart_number||'',
+    name: r.name||'',
+    phone: r.phone||'',
+    admitDate: r.admit_date||null,
+    dischargeDate: r.discharge_date||null,
+    status: r.status||'empty',
+    updatedAt: r.updated_at||'',
+    meals: {morning:!!r.meal_morning, lunch:!!r.meal_lunch, dinner:!!r.meal_dinner},
+    herbal: {morning:r.herbal_morning||'', lunch:r.herbal_lunch||'', dinner:r.herbal_dinner||''}
+  };
+}
+function wardHistToSB(h){
+  return {
+    hist_id: h.histId||uid(),
+    room_id: h.roomId||'',
+    bed: h.bed||1,
+    chart_number: h.chartNumber||'',
+    name: h.name||'',
+    phone: h.phone||'',
+    admit_date: h.admitDate||null,
+    discharge_date: h.dischargeDate||null,
+    total_days: h.totalDays||0,
+    meal_morning: !!(h.meals&&h.meals.morning),
+    meal_lunch: !!(h.meals&&h.meals.lunch),
+    meal_dinner: !!(h.meals&&h.meals.dinner),
+    herbal_morning: (h.herbal&&h.herbal.morning)||'',
+    herbal_lunch: (h.herbal&&h.herbal.lunch)||'',
+    herbal_dinner: (h.herbal&&h.herbal.dinner)||''
+  };
+}
+function sbToWardHist(r){
+  return {
+    histId: r.hist_id,
+    roomId: r.room_id,
+    bed: r.bed,
+    chartNumber: r.chart_number||'',
+    name: r.name||'',
+    phone: r.phone||'',
+    admitDate: r.admit_date||null,
+    dischargeDate: r.discharge_date||null,
+    totalDays: r.total_days||0,
+    meals: {morning:!!r.meal_morning, lunch:!!r.meal_lunch, dinner:!!r.meal_dinner},
+    herbal: {morning:r.herbal_morning||'', lunch:r.herbal_lunch||'', dinner:r.herbal_dinner||''}
+  };
+}
 function getWardBeds(){
   if(!S.wardBeds) S.wardBeds={};
   // 없는 침대만 초기화 (기존 데이터 절대 덮어쓰지 않음)
@@ -1202,7 +1332,10 @@ function daysDiff(dateStr){
   const d2=new Date();
   return Math.floor((d2-d1)/(1000*60*60*24));
 }
-function saveWardBeds(){save('wardBeds');if(_sb&&S.sbConnected)sbSave('wardBeds');}
+function saveWardBeds(){
+  save('wardBeds'); // localStorage 백업
+  if(_sb&&S.sbConnected) sbSave('wardBeds'); // Supabase 메인 저장
+}
 
 function renderWard(date){
   const wb=getWardBeds();
@@ -1226,13 +1359,15 @@ function renderWard(date){
     // 모든 기록 = 현재 입원중(wardBeds) + 퇴원이력(wardHistory)
     const hist=S.wardHistory||[];
     const allRecords=[
-      // 현재 입원중 환자
+      // 현재 입원중 환자 (퇴원 날짜 없음)
       ...Object.values(wb)
         .filter(b=>b.admitDate && b.status==='admitted')
-        .map(b=>({...b, _source:'current', dischargeDate:null})),
-      // 퇴원 이력 환자
+        .map(b=>({...b, _source:'current'})),
+      // 퇴원 이력 환자 (dischargeDate 있음)
       ...hist.map(h=>({...h, _source:'history'}))
     ];
+    // 디버그: 이력 개수 로그
+    if(hist.length>0) console.log('wardHistory 이력 수:', hist.length, hist.map(h=>h.name+'('+h.admitDate+'~'+h.dischargeDate+')'));
 
     // selDay 기준 필터:
     // - admitDate <= selDay (해당 날짜 이미 입원)
@@ -1245,12 +1380,14 @@ function renderWard(date){
       if(r.dischargeDate && r.dischargeDate < selDay) return false;
       return true;
     })
-    // 중복 제거: 같은 환자(roomId+bed+admitDate) 현재 기록 우선
+    // 중복 제거: roomId+bed+admitDate 가 완전히 같을 때만 중복
+    // (같은 침대에 같은 날 입원한 기록이 current + history 둘다 있으면 current 우선)
     .reduce((acc,r)=>{
-      const dupKey=r.roomId+'_'+r.bed+'_'+r.admitDate;
       const existing=acc.find(x=>x.roomId===r.roomId&&x.bed===r.bed&&x.admitDate===r.admitDate);
-      if(!existing) acc.push(r);
-      else if(r._source==='current') { // 현재 기록으로 교체
+      if(!existing){
+        acc.push(r);
+      } else if(r._source==='current'&&existing._source==='history'){
+        // 아직 입원중 → current로 교체
         const idx=acc.indexOf(existing);
         acc[idx]=r;
       }
@@ -2279,7 +2416,7 @@ window.handleXlsUpload=(input)=>{
   reader.readAsArrayBuffer(file);
 };
 
-window.confirmImport=()=>{
+window.confirmImport=async()=>{
   const data=S.xlsImportData;if(!data)return;
   let added=0,skipped=0,overwritten=0;
   data.forEach(r=>{
@@ -2289,10 +2426,21 @@ window.confirmImport=()=>{
       else skipped++;
     } else {S.patients.push(r);added++;}
   });
+  // ① localStorage 즉시 저장
   save('patients');
+  // ② Supabase 저장 (연결된 경우)
+  if(_sb&&S.sbConnected){
+    showToast('Supabase에 저장 중...');
+    try{
+      await sbSave('patients');
+      showToast(`✅ 완료! 신규 ${added}명 등록${overwritten>0?' · 덮어쓰기 '+overwritten+'명':''}${skipped>0?' · 중복 건너뜀 '+skipped+'건':''}`);
+    }catch(e){
+      showToast('⚠️ Supabase 저장 실패 - localStorage에는 저장됨','err');
+    }
+  } else {
+    showToast(`완료! 신규 ${added}명 등록${overwritten>0?' · 덮어쓰기 '+overwritten+'명':''}${skipped>0?' · 중복 건너뜀 '+skipped+'건':''}`);
+  }
   S.xlsImportData=null;
-  const msg=`완료! 신규 ${added}명 등록${overwritten>0?' · 덮어쓰기 '+overwritten+'명':''}${skipped>0?' · 중복 건너뜀 '+skipped+'건':''}`;
-  showToast(msg);
   render();
 };
 
@@ -3192,24 +3340,25 @@ window.btnSchedNext=function(){S.scheduleMonth=nMonth(S.scheduleMonth);var e=doc
 
 function init(){
   try{
-    loadAll(); // localStorage에서 먼저 로드
+    loadAll(); // localStorage fallback으로 먼저 로드
     loadXLSX();
-    // Supabase 연결 시도 (URL/Key가 저장된 경우)
+    // Supabase 자동 연결 + 데이터 로드
     if(S.supabaseUrl && S.supabaseKey){
       if(initSupabaseClient()){
-        // 로딩 화면 먼저 보여주기
         showLoading(true);
-        render();
-        // Supabase에서 데이터 로드
+        render(); // localStorage 데이터로 일단 보여주기
         sbLoadAll().then(loaded=>{
           showLoading(false);
           if(loaded){
-            showToast('✅ Supabase 데이터 로드 완료');
+            // Supabase 로드 성공 → localStorage도 동기화
+            SB_KEYS.forEach(k=>{
+              try{localStorage.setItem('clinic_'+k,JSON.stringify(S[k]));}catch(e){}
+            });
           }
           render();
         }).catch(e=>{
           showLoading(false);
-          console.error('Supabase 로드 실패:',e);
+          console.error('Supabase 초기 로드 실패:',e);
           render();
         });
       }else{
